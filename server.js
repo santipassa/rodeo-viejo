@@ -191,8 +191,24 @@ function buildRequestBody(spec, headers) {
 // ---------------------------------------------------------------------------
 // Ejecución de la request (proxy)
 // ---------------------------------------------------------------------------
+
+// Permite escribir la URL sin esquema (google.com.ar, www.google.com.ar/algo,
+// localhost:3000). Pedimos "://" para no confundir el puerto de "localhost:3000"
+// con un esquema. Lo local va por http; el resto, por https.
+function normalizeUrl(raw) {
+  const url = String(raw ?? '').trim();
+  if (!url) return url;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) return url;
+  if (url.startsWith('//')) return 'https:' + url;
+  const host = url.split(/[/?#]/)[0].split('@').pop().toLowerCase();
+  const isLocal = /^(localhost|127(\.\d+){3}|0\.0\.0\.0|\[::1\]|[^:]*\.local(host)?)(:\d+)?$/.test(host);
+  return (isLocal ? 'http://' : 'https://') + url;
+}
+
 async function performRequest({ method, url, headers, body, bodyMeta, requestMeta }) {
   const started = process.hrtime.bigint();
+  const rawUrl = url;
+  url = normalizeUrl(url);
   const m = (method || 'GET').toUpperCase();
   const reqHeaders = { ...(headers || {}) };
   // Compatibilidad: si el body llega como string lo tratamos como raw.
@@ -203,6 +219,7 @@ async function performRequest({ method, url, headers, body, bodyMeta, requestMet
   let status = null, statusText = null, responseHeaders = {}, responseBody = '', error = null;
   let requestText = '';
   try {
+    try { new URL(url); } catch { throw new Error(`URL inválida: ${rawUrl}`); }
     const init = { method: m, headers: reqHeaders, redirect: 'follow' };
     if (!['GET', 'HEAD'].includes(m)) {
       const built = buildRequestBody(spec, reqHeaders);
