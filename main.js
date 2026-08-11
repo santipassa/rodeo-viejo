@@ -55,6 +55,13 @@ function buildMenu() {
     },
     { role: 'editMenu' },
     {
+      label: 'Request',
+      submenu: [
+        { label: 'Enviar', accelerator: 'CmdOrCtrl+Return', click: () => runInRenderer('window.__pgSend && window.__pgSend()') },
+        { label: 'Buscar en la respuesta', accelerator: 'CmdOrCtrl+F', click: () => runInRenderer('window.__pgFind && window.__pgFind()') },
+      ],
+    },
+    {
       label: 'Ver',
       submenu: [
         { role: 'reload' },

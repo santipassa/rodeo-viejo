@@ -39,7 +39,8 @@ db.exec(`
 db.exec(`CREATE INDEX IF NOT EXISTS idx_history_url ON history(url);`);
 
 // Columnas agregadas después: en bases viejas hay que sumarlas a mano.
-for (const col of ['body_mode TEXT', 'body_meta TEXT']) {
+// request_meta guarda la request "como la escribiste": con las {{variables}} sin resolver.
+for (const col of ['body_mode TEXT', 'body_meta TEXT', 'request_meta TEXT']) {
   try { db.exec(`ALTER TABLE history ADD COLUMN ${col}`); } catch { /* ya existía */ }
 }
 
@@ -50,9 +51,9 @@ const insertStmt = db.prepare(`
   INSERT INTO history
     (created_at, method, url, request_headers, request_body,
      status, status_text, response_headers, response_body,
-     duration_ms, size_bytes, error, body_mode, body_meta)
+     duration_ms, size_bytes, error, body_mode, body_meta, request_meta)
   VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 function saveHistory(entry) {
@@ -71,6 +72,7 @@ function saveHistory(entry) {
     entry.error ?? null,
     entry.bodyMode ?? null,
     entry.bodyMeta ? JSON.stringify(entry.bodyMeta) : null,
+    entry.requestMeta ? JSON.stringify(entry.requestMeta) : null,
   );
   return Number(info.lastInsertRowid);
 }
@@ -93,6 +95,7 @@ function rowToEntry(r) {
     favorite: !!r.favorite,
     bodyMode: r.body_mode || null,
     bodyMeta: safeParse(r.body_meta, null),
+    requestMeta: safeParse(r.request_meta, null),
   };
 }
 
@@ -188,7 +191,7 @@ function buildRequestBody(spec, headers) {
 // ---------------------------------------------------------------------------
 // Ejecución de la request (proxy)
 // ---------------------------------------------------------------------------
-async function performRequest({ method, url, headers, body, bodyMeta }) {
+async function performRequest({ method, url, headers, body, bodyMeta, requestMeta }) {
   const started = process.hrtime.bigint();
   const m = (method || 'GET').toUpperCase();
   const reqHeaders = { ...(headers || {}) };
@@ -220,7 +223,7 @@ async function performRequest({ method, url, headers, body, bodyMeta }) {
 
   const id = saveHistory({
     method: m, url, requestHeaders: reqHeaders, requestBody: requestText || null,
-    bodyMode: spec.mode || 'none', bodyMeta: bodyMeta || null,
+    bodyMode: spec.mode || 'none', bodyMeta: bodyMeta || null, requestMeta: requestMeta || null,
     status, statusText, responseHeaders, responseBody, durationMs, sizeBytes, error,
   });
 

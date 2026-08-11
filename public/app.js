@@ -191,13 +191,16 @@ function updateHeadersCount() {
   $('#headers-count').textContent = n ? n : '';
 }
 
+// URLSearchParams escapa las llaves; se las devolvemos para no romper las {{variables}}.
+function keepVarBraces(qs) { return qs.replace(/%7B%7B/gi, '{{').replace(/%7D%7D/gi, '}}'); }
+
 // Sincronizar query params → URL
 let suppressUrlSync = false;
 function syncParamsToUrl() {
   if (suppressUrlSync) return;
   const base = $('#url').value.split('?')[0];
   const params = paramsEditor.get();
-  const qs = new URLSearchParams(params).toString();
+  const qs = keepVarBraces(new URLSearchParams(params).toString());
   $('#url').value = qs ? `${base}?${qs}` : base;
   const t = getActiveTab();
   if (t) { t.url = $('#url').value; renderTabBar(); }
@@ -566,9 +569,23 @@ function renderTabBar() {
 // Enviar request
 // ---------------------------------------------------------------------------
 $('#send').addEventListener('click', sendRequest);
-$('#url').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendRequest(); });
+$('#url').addEventListener('keydown', (e) => { if (e.key === 'Enter') trySend(); });
+
+// Cmd/Ctrl+Enter envía desde cualquier parte de la app (body, headers, respuesta…).
+window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); trySend(); }
+});
+
+function trySend() {
+  // Con un modal abierto el Enter es del modal, no de la request de atrás.
+  if ($('.modal:not(.hidden)')) return;
+  sendRequest();
+}
+
+$('#send').title = `Enviar (${/Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl'} + Enter)`;
 
 async function sendRequest() {
+  if ($('#send').disabled) return; // ya hay una request en vuelo
   const url = $('#url').value.trim();
   if (!url) { toast('Ingresá una URL'); return; }
   readActiveState();
@@ -590,6 +607,9 @@ async function sendRequest() {
       headers,
       body: await bodyToWire(bodyState),
       bodyMeta: bodyToMeta(bodyState),
+      // La request tal como la escribiste, con las {{variables}} sin resolver:
+      // es lo que se recarga al reabrirla desde el historial.
+      requestMeta: { url, headers: headersEditor.getRows() },
     };
   } catch (e) {
     btn.disabled = false; btn.textContent = 'Enviar';
@@ -630,6 +650,7 @@ function clearResponse() {
   $('#resp-headers').textContent = '';
   $('#resp-headers-count').textContent = '';
   currentResponseText = '';
+  refreshFind();
 }
 
 function renderResponse(data) {
@@ -645,6 +666,7 @@ function renderResponse(data) {
     $('#resp-body').textContent = data.error;
     $('#resp-headers').textContent = '';
     currentResponseText = data.error;
+    refreshFind();
     return;
   }
 
@@ -660,6 +682,7 @@ function renderResponse(data) {
   $('#resp-headers').textContent = headerLines || '(sin headers)';
   $('#resp-headers-count').textContent = Object.keys(data.responseHeaders || {}).length || '';
   currentResponseText = data.responseBody || '';
+  refreshFind();
 }
 
 $('#copy-resp').addEventListener('click', () => {
@@ -692,6 +715,190 @@ function highlightJson(json) {
       return `<span class="${cls}">${match}</span>`;
     });
 }
+
+// ---------------------------------------------------------------------------
+// Buscar dentro de la respuesta (Cmd/Ctrl+F)
+// ---------------------------------------------------------------------------
+const findBar = $('#find-bar');
+const findInput = $('#find-input');
+const FIND_MAX = 5000;          // tope de coincidencias: bodies enormes no cuelgan la UI
+const FIND_DEBOUNCE = 120;
+
+// Chromium pinta los rangos sin tocar el DOM (así no rompemos el highlight del JSON).
+const canHighlight = typeof CSS !== 'undefined' && !!CSS.highlights && typeof Highlight === 'function';
+
+let findRanges = [];
+let findIndex = -1;
+let findCase = false;
+let findTimer;
+
+function findOpen() { return !findBar.classList.contains('hidden'); }
+
+// Se busca en el panel de respuesta que esté visible (Body o Headers).
+function findTarget() { return $('#response-section .tab-panel.active .output'); }
+
+// Texto plano del panel + de qué nodo salió cada posición, para poder armar los rangos.
+function collectText(el) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.classList.contains('placeholder')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const nodes = [];
+  let text = '';
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    nodes.push({ node: n, start: text.length, end: text.length + n.nodeValue.length });
+    text += n.nodeValue;
+  }
+  return { nodes, text };
+}
+
+function runFind() {
+  clearHighlights();
+  findRanges = [];
+  findIndex = -1;
+
+  const term = findInput.value;
+  const el = findTarget();
+  if (el && term) {
+    const { nodes, text } = collectText(el);
+    const hay = findCase ? text : text.toLowerCase();
+    const needle = findCase ? term : term.toLowerCase();
+
+    // Las coincidencias salen ordenadas, así que recorremos los nodos con un cursor.
+    let ni = 0;
+    const at = (pos) => {
+      while (ni < nodes.length - 1 && pos >= nodes[ni].end) ni++;
+      return { node: nodes[ni].node, offset: pos - nodes[ni].start };
+    };
+
+    let from = 0, i;
+    while (nodes.length && (i = hay.indexOf(needle, from)) !== -1 && findRanges.length < FIND_MAX) {
+      const a = at(i);
+      const b = at(i + needle.length);
+      const range = document.createRange();
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+      findRanges.push(range);
+      from = i + needle.length;
+    }
+    if (findRanges.length) findIndex = 0;
+  }
+
+  paintFind();
+  if (findIndex >= 0) scrollToMatch();
+}
+
+function paintFind() {
+  const count = $('#find-count');
+  if (!findInput.value) count.textContent = '';
+  else if (!findRanges.length) count.textContent = 'sin resultados';
+  else count.textContent = `${findIndex + 1}/${findRanges.length}${findRanges.length === FIND_MAX ? '+' : ''}`;
+  count.classList.toggle('none', !!findInput.value && !findRanges.length);
+
+  if (!canHighlight) {
+    // Sin Custom Highlight API marcamos la coincidencia con la selección del sistema.
+    const cur = findRanges[findIndex];
+    if (cur) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(cur); }
+    return;
+  }
+  if (!findRanges.length) { clearHighlights(); return; }
+  CSS.highlights.set('rv-find', new Highlight(...findRanges));
+  const cur = findRanges[findIndex];
+  if (cur) {
+    const h = new Highlight(cur);
+    h.priority = 1; // gana sobre el resaltado del resto de las coincidencias
+    CSS.highlights.set('rv-find-current', h);
+  } else {
+    CSS.highlights.delete('rv-find-current');
+  }
+}
+
+function clearHighlights() {
+  if (!canHighlight) return;
+  CSS.highlights.delete('rv-find');
+  CSS.highlights.delete('rv-find-current');
+}
+
+function scrollToMatch() {
+  const range = findRanges[findIndex];
+  const box = findTarget();
+  if (!range || !box) return;
+  const r = range.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  if (r.top < b.top + 8 || r.bottom > b.bottom - 8) {
+    box.scrollTop += r.top - b.top - box.clientHeight / 3;
+  }
+}
+
+function stepFind(delta) {
+  if (!findRanges.length) return;
+  findIndex = (findIndex + delta + findRanges.length) % findRanges.length;
+  paintFind();
+  scrollToMatch();
+}
+
+function openFind() {
+  const el = findTarget();
+  if (!el) return;
+  findBar.classList.remove('hidden');
+  // Si venías con algo seleccionado en la respuesta, arrancamos buscando eso.
+  const sel = window.getSelection?.();
+  const picked = String(sel || '').trim();
+  if (picked && picked.length <= 120 && sel.anchorNode && el.contains(sel.anchorNode)) {
+    findInput.value = picked;
+  }
+  findInput.focus();
+  findInput.select();
+  runFind();
+}
+
+function closeFind() {
+  findBar.classList.add('hidden');
+  clearHighlights();
+  findRanges = [];
+  findIndex = -1;
+  findTarget()?.focus();
+}
+
+// Los rangos apuntan a nodos que ya no existen cuando se repinta la respuesta.
+function refreshFind() {
+  if (findOpen()) runFind();
+  else clearHighlights();
+}
+
+findInput.addEventListener('input', () => {
+  clearTimeout(findTimer);
+  findTimer = setTimeout(runFind, FIND_DEBOUNCE);
+});
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+});
+$('#find-next').addEventListener('click', () => stepFind(1));
+$('#find-prev').addEventListener('click', () => stepFind(-1));
+$('#find-close').addEventListener('click', closeFind);
+$('#find-case').addEventListener('click', () => {
+  findCase = !findCase;
+  $('#find-case').classList.toggle('on', findCase);
+  runFind();
+});
+// Cambiar de pestaña (Body ↔ Headers) rehace la búsqueda sobre el panel nuevo.
+$('#resp-tabs').addEventListener('click', () => { if (findOpen()) runFind(); });
+
+window.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  const key = e.key.toLowerCase();
+  if (mod && key === 'f') {
+    if ($('.modal:not(.hidden)')) return; // hay un modal abierto: el buscador quedaría tapado
+    e.preventDefault();
+    openFind();
+  } else if (mod && key === 'g' && findOpen()) {
+    e.preventDefault();
+    stepFind(e.shiftKey ? -1 : 1);
+  } else if (e.key === 'Escape' && findOpen()) {
+    closeFind();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Historial
@@ -737,7 +944,7 @@ function renderHistory(items) {
       e.preventDefault();
       openHistMenu(e, it.id);
     });
-    li.addEventListener('mouseenter', (e) => showUrlTip(e, it.method, it.url));
+    li.addEventListener('mouseenter', (e) => showUrlTip(e, it));
     li.addEventListener('mousemove', moveUrlTip);
     li.addEventListener('mouseleave', hideUrlTip);
     list.appendChild(li);
@@ -753,11 +960,15 @@ const URL_TIP_OFFSET = 14;
 let urlTipTimer;
 let urlTipX = 0, urlTipY = 0;
 
-function showUrlTip(e, method, url) {
+function showUrlTip(e, it) {
   clearTimeout(urlTipTimer);
   urlTipX = e.clientX; urlTipY = e.clientY;
   urlTipTimer = setTimeout(() => {
-    urlTip.innerHTML = `<span class="url-tip-method m-${escapeAttr(method)}">${escapeHtml(method)}</span>${escapeHtml(url)}`;
+    // Si la request usaba {{variables}}, mostramos también cómo está guardada.
+    const tpl = requestUrlTemplate(it);
+    const extra = tpl !== it.url ? `<div class="url-tip-tpl">${escapeHtml(tpl)}</div>` : '';
+    urlTip.innerHTML =
+      `<span class="url-tip-method m-${escapeAttr(it.method)}">${escapeHtml(it.method)}</span>${escapeHtml(it.url)}${extra}`;
     urlTip.classList.remove('hidden');
     placeUrlTip();
   }, URL_TIP_DELAY);
@@ -878,15 +1089,30 @@ async function openHistory(id) {
   const res = await fetch('/api/history/' + id);
   if (!res.ok) return;
   const it = await res.json();
-  const headers = Object.entries(it.requestHeaders || {}).map(([k, v]) => ({ key: k, value: v, enabled: true }));
   newTab({
     method: it.method,
-    url: it.url,
-    headers,
+    url: requestUrlTemplate(it),
+    headers: headersFromHistory(it),
     body: bodyFromHistory(it),
     response: it,
     historyId: it.id,
   });
+}
+
+// La URL para reeditar: la que escribiste (con {{variables}}) si la tenemos guardada.
+function requestUrlTemplate(it) {
+  return it.requestMeta?.url ?? it.url;
+}
+
+// Ídem con los headers: requestMeta conserva las filas deshabilitadas y las {{variables}};
+// request_headers trae lo que realmente viajó (ya resuelto y con el Content-Type automático).
+function headersFromHistory(it) {
+  if (Array.isArray(it.requestMeta?.headers)) {
+    return it.requestMeta.headers.map((h) => ({
+      key: h.key || '', value: h.value || '', enabled: h.enabled !== false,
+    }));
+  }
+  return Object.entries(it.requestHeaders || {}).map(([k, v]) => ({ key: k, value: v, enabled: true }));
 }
 
 // El historial guarda el modo y las filas del body; los archivos hay que volver a elegirlos.
@@ -1308,9 +1534,11 @@ $$('.output').forEach((el) => {
   });
 });
 
-// Expuestas para los atajos del menú de Electron (Cmd+T / Cmd+W).
+// Expuestas para los atajos del menú de Electron (Cmd+T / Cmd+W / Cmd+F / Cmd+Enter).
 window.__pgNewTab = () => newTab();
 window.__pgCloseTab = () => { if (activeTabId) closeTab(activeTabId); };
+window.__pgFind = () => { if (!$('.modal:not(.hidden)')) openFind(); };
+window.__pgSend = () => trySend();
 
 // Init: variables + primera pestaña vacía + historial.
 loadVars();

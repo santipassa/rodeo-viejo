@@ -1,10 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output
+# Build output (todo lo de build/ lo regenera `npm run icon`)
 dist/
-build/*.icns
-build/*.ico
+build/
 
 # macOS
 .DS_Store
