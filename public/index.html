@@ -42,8 +42,7 @@
           <option>PATCH</option><option>DELETE</option><option>HEAD</option>
           <option>OPTIONS</option><option>CONNECT</option><option>TRACE</option>
         </select>
-        <input id="url" type="text" placeholder="https://api.ejemplo.com/v1/recurso" autocomplete="off" spellcheck="false" />
-        <button id="import-curl" class="secondary-btn" title="Pegar un comando curl">Importar cURL</button>
+        <input id="url" type="text" placeholder="https://api.ejemplo.com/v1/recurso  ·  o pegá un cURL" title="Pegá un comando cURL acá y lo importo solo" autocomplete="off" spellcheck="false" />
         <button id="export-curl" class="secondary-btn" title="Copiar esta request como comando curl">Exportar cURL</button>
         <button id="send" class="send-btn">Enviar</button>
       </section>
@@ -157,19 +156,6 @@
     </main>
   </div>
 
-  <!-- Modal importar cURL -->
-  <div id="curl-modal" class="modal hidden">
-    <div class="modal-box">
-      <h3>Importar comando cURL</h3>
-      <p class="modal-hint">Pegá un <code>curl</code> (copiado del navegador o de la doc de una API) y lo convierto en una request.</p>
-      <textarea id="curl-input" placeholder="curl -X POST https://api.ejemplo.com/login -H 'Content-Type: application/json' -d '{&quot;user&quot;:&quot;a&quot;}'" spellcheck="false"></textarea>
-      <div class="modal-actions">
-        <button id="curl-cancel" class="secondary-btn">Cancelar</button>
-        <button id="curl-parse" class="send-btn">Importar</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Modal variables -->
   <div id="vars-modal" class="modal hidden">
     <div class="modal-box">
@@ -195,6 +181,12 @@
       </div>
     </div>
   </div>
+
+  <!-- Menú contextual de las pestañas (click derecho) -->
+  <ul id="tab-menu" class="ctx-menu hidden">
+    <li data-action="duplicate">Duplicar pestaña</li>
+    <li data-action="close" class="danger">Cerrar pestaña</li>
+  </ul>
 
   <!-- Menú contextual del historial (click derecho) -->
   <ul id="hist-menu" class="ctx-menu hidden">
