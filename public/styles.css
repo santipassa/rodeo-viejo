@@ -326,8 +326,8 @@ body.resizing * { cursor: col-resize !important; }
 .modal-box h3 { margin: 0 0 6px; }
 .modal-hint { color: var(--text-dim); font-size: 13px; margin: 0 0 12px; }
 .modal-hint code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); }
-#curl-input, #export-output { width: 100%; min-height: 160px; resize: vertical; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.5; }
-#curl-input:focus, #export-output:focus { outline: none; border-color: var(--accent); }
+#export-output { width: 100%; min-height: 160px; resize: vertical; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.5; }
+#export-output:focus { outline: none; border-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 
 /* ---------- Menú contextual ---------- */

@@ -530,6 +530,35 @@ function closeTab(id) {
   loadHistory();
 }
 
+// Abre una copia de la pestaña: misma request, sin la respuesta ni el vínculo al historial.
+function duplicateTab(id) {
+  const src = tabs.find((t) => t.id === id);
+  if (!src) return;
+  // Si es la activa, lo que vale es el DOM: hay que volcarlo antes de copiarlo.
+  if (id === activeTabId) readActiveState();
+  newTab({
+    method: src.method,
+    url: src.url,
+    headers: src.headers.map((r) => ({ ...r })),
+    body: cloneBody(src.body),
+  });
+  toast('Pestaña duplicada');
+}
+
+// Copia profunda: las filas se editan in situ, así que no pueden compartirse entre pestañas.
+// El File sí se comparte (es inmutable) para no obligar a volver a elegir el archivo.
+function cloneBody(b) {
+  const src = { ...emptyBody(), ...(b || {}) };
+  return {
+    mode: src.mode,
+    raw: { ...src.raw },
+    urlencoded: src.urlencoded.map((r) => ({ ...r })),
+    formData: src.formData.map((r) => ({ ...r })),
+    binary: { ...src.binary },
+    graphql: { ...src.graphql },
+  };
+}
+
 function tabTitle(t) {
   if (!t.url.trim()) return 'Nueva request';
   try {
@@ -554,6 +583,10 @@ function renderTabBar() {
     el.addEventListener('click', (e) => {
       if (e.target.classList.contains('t-close')) { closeTab(t.id); return; }
       switchTab(t.id);
+    });
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openTabMenu(e, t.id);
     });
     bar.appendChild(el);
   }
@@ -1039,26 +1072,47 @@ $('#sidebar-resizer').addEventListener('dblclick', () => {
 window.addEventListener('resize', () => setSidebarWidth($('#sidebar').offsetWidth));
 
 // ---------------------------------------------------------------------------
-// Menú contextual del historial
+// Menús contextuales (historial y pestañas)
 // ---------------------------------------------------------------------------
 const histMenu = $('#hist-menu');
+const tabMenu = $('#tab-menu');
 let histMenuId = null;
+let tabMenuId = null;
 
-function openHistMenu(e, id) {
-  histMenuId = id;
-  histMenu.classList.remove('hidden');
-  // Se posiciona en el cursor, corrigiendo si se sale de la ventana.
-  const { offsetWidth: w, offsetHeight: h } = histMenu;
+// Se posiciona en el cursor, corrigiendo si se sale de la ventana.
+function placeMenu(menu, e) {
+  const { offsetWidth: w, offsetHeight: h } = menu;
   const x = Math.min(e.clientX, window.innerWidth - w - 8);
   const y = Math.min(e.clientY, window.innerHeight - h - 8);
-  histMenu.style.left = Math.max(8, x) + 'px';
-  histMenu.style.top = Math.max(8, y) + 'px';
+  menu.style.left = Math.max(8, x) + 'px';
+  menu.style.top = Math.max(8, y) + 'px';
+}
+
+function openHistMenu(e, id) {
+  closeTabMenu();
+  histMenuId = id;
+  histMenu.classList.remove('hidden');
+  placeMenu(histMenu, e);
 }
 
 function closeHistMenu() {
   histMenu.classList.add('hidden');
   histMenuId = null;
 }
+
+function openTabMenu(e, id) {
+  closeHistMenu();
+  tabMenuId = id;
+  tabMenu.classList.remove('hidden');
+  placeMenu(tabMenu, e);
+}
+
+function closeTabMenu() {
+  tabMenu.classList.add('hidden');
+  tabMenuId = null;
+}
+
+function closeMenus() { closeHistMenu(); closeTabMenu(); }
 
 histMenu.addEventListener('click', async (e) => {
   const action = e.target.dataset.action;
@@ -1067,11 +1121,26 @@ histMenu.addEventListener('click', async (e) => {
   if (action === 'delete' && id != null) await deleteHistory(id);
 });
 
-window.addEventListener('click', (e) => { if (!histMenu.contains(e.target)) closeHistMenu(); });
-window.addEventListener('contextmenu', (e) => { if (!e.target.closest('.hist-item')) closeHistMenu(); });
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHistMenu(); });
-window.addEventListener('resize', closeHistMenu);
-window.addEventListener('scroll', closeHistMenu, true);
+tabMenu.addEventListener('click', (e) => {
+  const action = e.target.dataset.action;
+  const id = tabMenuId;
+  closeTabMenu();
+  if (id == null) return;
+  if (action === 'duplicate') duplicateTab(id);
+  else if (action === 'close') closeTab(id);
+});
+
+window.addEventListener('click', (e) => {
+  if (!histMenu.contains(e.target)) closeHistMenu();
+  if (!tabMenu.contains(e.target)) closeTabMenu();
+});
+window.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('.hist-item')) closeHistMenu();
+  if (!e.target.closest('.tabitem')) closeTabMenu();
+});
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenus(); });
+window.addEventListener('resize', closeMenus);
+window.addEventListener('scroll', closeMenus, true);
 
 async function deleteHistory(id) {
   const res = await fetch('/api/history/' + id, { method: 'DELETE' });
@@ -1166,29 +1235,58 @@ $('#search').addEventListener('input', () => {
 $('#fav-only').addEventListener('change', loadHistory);
 
 // ---------------------------------------------------------------------------
-// Importar cURL (abre una pestaña nueva con la request)
+// Importar cURL: se pega el comando en la barra de direcciones y se convierte solo
 // ---------------------------------------------------------------------------
-$('#import-curl').addEventListener('click', () => $('#curl-modal').classList.remove('hidden'));
-$('#curl-cancel').addEventListener('click', () => $('#curl-modal').classList.add('hidden'));
-$('#curl-modal').addEventListener('click', (e) => { if (e.target.id === 'curl-modal') $('#curl-modal').classList.add('hidden'); });
-$('#curl-parse').addEventListener('click', () => {
-  const parsed = parseCurl($('#curl-input').value);
+$('#url').addEventListener('paste', (e) => {
+  const text = e.clipboardData?.getData('text') || '';
+  if (!looksLikeCurl(text)) return; // pegado normal (una URL, un fragmento…)
+  e.preventDefault();               // el comando no tiene por qué quedar en el input
+  importCurl(text);
+});
+
+// Con que arranque en `curl` alcanza; el prompt (`$ `) y los saltos de línea del copy&paste sobran.
+function looksLikeCurl(text) {
+  return /^\s*\$?\s*curl[\s\\]/i.test(text);
+}
+
+function importCurl(text) {
+  readActiveState();
+  const parsed = parseCurl(text);
   if (!parsed) { toast('No pude interpretar ese curl'); return; }
-  const headers = Object.entries(parsed.headers || {}).map(([k, v]) => ({ key: k, value: v, enabled: true }));
-  newTab({
+  const init = {
     method: parsed.method,
     url: parsed.url,
-    headers,
+    headers: Object.entries(parsed.headers || {}).map(([k, v]) => ({ key: k, value: v, enabled: true })),
     body: parsed.body,
-  });
-  $('#curl-modal').classList.add('hidden');
-  $('#curl-input').value = '';
+  };
+  // Si la pestaña está en blanco la aprovechamos; si no, no le pisamos la request al usuario.
+  if (isBlankTab(getActiveTab())) replaceActiveTab(init);
+  else newTab(init);
+
   // Los archivos no viajan dentro del comando: hay que volver a elegirlos a mano.
   const pendientes = parsed.body.mode === 'binary'
     ? !!parsed.body.binary.fileName
     : parsed.body.formData.some((r) => r.kind === 'file');
   toast(pendientes ? 'cURL importado ✅ — volvé a elegir los archivos' : 'cURL importado ✅');
-});
+}
+
+// Pestaña recién abierta: sin URL, sin headers, sin body y sin respuesta.
+function isBlankTab(t) {
+  return !!t
+    && !t.url.trim()
+    && !t.headers.some((r) => r.key.trim() || r.value.trim())
+    && t.body.mode === 'none'
+    && !t.response;
+}
+
+function replaceActiveTab(init) {
+  const t = getActiveTab();
+  if (!t) { newTab(init); return; }
+  Object.assign(t, init, { response: null, historyId: null });
+  applyState(t);
+  renderTabBar();
+  loadHistory();
+}
 
 // ---------------------------------------------------------------------------
 // Variables reutilizables ({{nombre}})
