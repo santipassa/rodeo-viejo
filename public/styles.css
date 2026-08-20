@@ -133,21 +133,22 @@ body.resizing * { cursor: col-resize !important; }
   display: flex; align-items: center; gap: 8px; padding: 8px 10px 9px 12px;
   background: var(--bg-2); border: 1px solid transparent; border-bottom: none;
   border-radius: 8px 8px 0 0; cursor: pointer; max-width: 220px; min-width: 120px;
-  color: var(--text-dim); position: relative; top: 1px; opacity: .7;
-  transition: background .12s, opacity .12s;
+  color: var(--text-dim); position: relative; top: 1px;
+  transition: background .12s, color .12s;
 }
-.tabitem:hover { color: var(--text); background: var(--bg-3); opacity: 1; }
+.tabitem:hover { color: var(--text); background: var(--bg-3); }
 /* Pestaña activa: bien diferenciada — fondo claro, borde naranja arriba y a los lados */
 .tabitem.active {
   background: var(--bg-3);
   color: var(--text);
   border-color: var(--border);
-  opacity: 1;
   box-shadow: inset 0 3px 0 var(--accent), 0 -2px 8px rgba(0,0,0,.25);
   font-weight: 600;
 }
-.tabitem.active .t-method { color: var(--accent); }
-.tabitem .t-method { font-family: var(--mono); font-size: 10px; font-weight: 700; }
+/* El método siempre conserva su color propio: sirve para distinguir la request,
+   no para marcar qué pestaña está activa. En las inactivas sólo baja de intensidad. */
+.tabitem .t-method { font-family: var(--mono); font-size: 10px; font-weight: 700; opacity: .7; }
+.tabitem.active .t-method, .tabitem:hover .t-method { opacity: 1; }
 .tabitem .t-title { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .tabitem .t-dot { color: var(--accent); font-size: 16px; line-height: 1; }
 .tabitem .t-close {
